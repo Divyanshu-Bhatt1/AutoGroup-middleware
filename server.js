@@ -31,76 +31,56 @@ const shopmonkeyApi = axios.create({
 
 // --- API Endpoints ---
 
-app.post("/create-customer", async (req, res, next) => {
-  const customerInfo = req.body;
-  if (!customerInfo.name || !customerInfo.phone) {
-    return res
-      .status(400)
-      .json({
-        success: false,
-        message: "Client error: Missing required fields 'name' and 'phone'.",
-      });
-  }
-  try {
-    const { customerData, wasCreated, customerName } =
-      await findOrCreateCustomer(customerInfo);
-    const message = wasCreated
-      ? `Successfully created new customer: ${customerName}.`
-      : `Found existing customer: ${customerName}.`;
-    console.log(`[SUCCESS] /create-customer: ${message}`);
-    return res
-      .status(200)
-      .json({ success: true, message: message, customer: customerData });
-  } catch (error) {
-    return next(error);
-  }
-});
+app.post("/create-customer-vehicle", async (req, res, next) => {
+  const { name, phone, make, model, licensePlate, year } = req.body;
 
-app.post("/create-vehicle", async (req, res, next) => {
-  const {
-    customerId,
-    year,
-    make,
-    model,
-    licensePlateState,
-    licensePlate,
-    size,
-  } = req.body;
-  if (!customerId || !make || !model) {
-    return res
-      .status(400)
-      .json({
-        success: false,
-        message:
-          "Client error: Missing required fields 'customerId', 'make', and 'model'.",
-      });
+  // 1. Validate required fields
+  if (!name || !phone || !make || !model) {
+    return res.status(400).json({
+      success: false,
+      message: "Client error: Missing required fields 'name', 'phone', 'make', or 'model'.",
+    });
   }
+
   try {
+    // 2. Find or Create Customer
+    const { customerData, wasCreated: customerCreated, customerName } =
+      await findOrCreateCustomer({ name, phone });
+
+    const customerMessage = customerCreated
+      ? `Created new customer: ${customerName}`
+      : `Found existing customer: ${customerName}`;
+
+    // 3. Find or Create Vehicle (using the customer's ID)
     const vehicleDetails = {
-      year,
       make,
       model,
-      licensePlateState,
       licensePlate,
-      size,
+      year,
     };
-    const { vehicleData, wasCreated, vehicleName } = await findOrCreateVehicle(
-      customerId,
-      vehicleDetails
-    );
-    const message = wasCreated
-      ? `Successfully created new vehicle: ${vehicleName}.`
-      : `Found existing vehicle: ${vehicleName}.`;
-    console.log(`[SUCCESS] /create-vehicle: ${message}`);
-    return res
-      .status(200)
-      .json({ success: true, message: message, vehicle: vehicleData });
+
+    const { vehicleData, wasCreated: vehicleCreated, vehicleName } =
+      await findOrCreateVehicle(customerData.id, vehicleDetails);
+
+    const vehicleMessage = vehicleCreated
+      ? `Created new vehicle: ${vehicleName}`
+      : `Found existing vehicle: ${vehicleName}`;
+
+    const combinedMessage = `Success! ${customerMessage}. ${vehicleMessage}.`;
+    console.log(`[SUCCESS] /create-customer-vehicle: ${combinedMessage}`);
+
+    return res.status(200).json({
+      success: true,
+      message: combinedMessage,
+      customer: customerData,
+      vehicle: vehicleData,
+    });
+
   } catch (error) {
     return next(error);
   }
 });
 
-// --- [CORRECTED] API Endpoint: Book Appointment ---
 app.post("/book-appointment", async (req, res, next) => {
   const { phone, makeModel, title, startDate, durationMinutes } = req.body;
   if (!phone || !makeModel || !title || !startDate || !durationMinutes) {
@@ -124,13 +104,15 @@ app.post("/book-appointment", async (req, res, next) => {
           message: `Could not find a customer with the phone number ${phone}. Please create the customer first.`,
         });
     }
-    const customerName = `${customer.firstName || ""} ${
-      customer.lastName || ""
-    }`.trim();
+
+    // Format Name: FirstName LastInitial.
+    const firstName = customer.firstName || "";
+    const lastNameInitial = customer.lastName ? `${customer.lastName[0]}.` : "";
+    const formattedName = `${firstName} ${lastNameInitial}`.trim();
 
     // Reverted to the original, more reliable findVehicle helper call
     const vehicle = await findVehicle(customer.id, { makeModel });
-    
+
     if (!vehicle) {
       console.log(
         `[FAIL] /book-appointment: Vehicle "${makeModel}" not found for customer ${customer.id}.`
@@ -139,9 +121,13 @@ app.post("/book-appointment", async (req, res, next) => {
         .status(404)
         .json({
           success: false,
-          message: `Could not find a vehicle matching "${makeModel}" for ${customerName}. Please create the vehicle first.`,
+          message: `Could not find a vehicle matching "${makeModel}" for ${formattedName}. Please create the vehicle first.`,
         });
     }
+
+    // Format Title: Name / Year Make Model / Reason
+    const vehicleString = `${vehicle.year || ""} ${vehicle.make} ${vehicle.model}`.trim();
+    const appointmentTitle = `${formattedName} / ${vehicleString} / ${title}`;
 
     const start = new Date(startDate);
     const end = new Date(start.getTime() + durationMinutes * 60000);
@@ -149,17 +135,17 @@ app.post("/book-appointment", async (req, res, next) => {
       customerId: customer.id,
       vehicleId: vehicle.id,
       locationId: LOCATION_ID,
-      name: title,
+      name: appointmentTitle,
       startDate: start.toISOString(),
       endDate: end.toISOString(),
-      color: "purple",
+      color: "blue", 
     };
     await shopmonkeyApi.post("/appointment", appointmentPayload);
     const localAppointmentTime = formatToShopTime(start);
     // Use the vehicle details for a more accurate message
     const vehicleName = `${vehicle.year || ''} ${vehicle.make} ${vehicle.model}`.trim();
-    const successMessage = `Success! Appointment confirmed for ${customerName} for the ${vehicleName} on ${localAppointmentTime}.`;
-    
+    const successMessage = `Success! Appointment confirmed for ${formattedName} for the ${vehicleName} on ${localAppointmentTime}.`;
+
     console.log(`[SUCCESS] /book-appointment: ${successMessage}`);
     return res.status(201).json({ success: true, message: successMessage });
   } catch (error) {
@@ -225,8 +211,6 @@ app.post("/check-availability", async (req, res, next) => {
   }
 });
 
-// --- [CORRECTED] API Endpoint: Check Appointment Status ---
-// --- [CORRECTED] API Endpoint: Check Appointment Status ---
 app.post("/check-status", async (req, res, next) => {
   const { phone } = req.body;
   if (!phone) {
@@ -249,15 +233,12 @@ app.post("/check-status", async (req, res, next) => {
     const now = new Date().toISOString();
     const appointmentsResponse = await shopmonkeyApi.post("/appointment/search", {
       where: {
-        locationId: LOCATION_ID, // Also simplifying this based on common API patterns
-        // --- THIS IS THE FIX ---
-        // Changed from an object to a direct string value as required by the API.
+        locationId: LOCATION_ID,
         customerId: customer.id,
-        // ----------------------
-        startDate: { gte: now }, // This field correctly uses an object
+        startDate: { gte: now },
       },
-      orderBy: { startDate: 'asc' }, 
-      limit: 1, 
+      orderBy: { startDate: 'asc' },
+      limit: 1,
     });
 
     const nextAppointment = appointmentsResponse.data.data?.[0];
@@ -277,8 +258,8 @@ app.post("/check-status", async (req, res, next) => {
     // Case 2: An appointment was found, now determine its status
     const vehicleResponse = await shopmonkeyApi.get(`/vehicle/${nextAppointment.vehicleId}`);
     const vehicle = vehicleResponse.data.data;
-    const vehicleName = vehicle 
-      ? `${vehicle.year || ""} ${vehicle.make} ${vehicle.model}`.trim() 
+    const vehicleName = vehicle
+      ? `${vehicle.year || ""} ${vehicle.make} ${vehicle.model}`.trim()
       : "their vehicle";
     const appointmentTime = formatToShopTime(new Date(nextAppointment.startDate));
 
@@ -291,23 +272,23 @@ app.post("/check-status", async (req, res, next) => {
         appointmentStatus = 'approved';
         responseMessage = `Your appointment for the ${vehicleName} on ${appointmentTime} is approved and confirmed.`;
         break;
-      
+
       case 'Scheduled':
         appointmentStatus = 'pending_approval';
         responseMessage = `Your appointment for the ${vehicleName} on ${appointmentTime} is scheduled, but is still pending final approval from the shop.`;
         break;
-      
+
       case 'Canceled':
         appointmentStatus = 'canceled';
         responseMessage = `The appointment for the ${vehicleName} on ${appointmentTime} has been canceled.`;
         break;
-      
+
       default:
         appointmentStatus = 'other';
         responseMessage = `The appointment for the ${vehicleName} on ${appointmentTime} has a status of '${nextAppointment.status}'.`;
         break;
     }
-    
+
     console.log(`[SUCCESS] /check-status (Appointment Found): Status is ${nextAppointment.status}`);
     return res.status(200).json({
       success: true,
@@ -332,23 +313,22 @@ app.use((error, req, res, next) => {
     : { message: error.message, code: "LOCAL_ERROR" };
   const statusCode = error.response ? error.response.status : 500;
   console.error(
-    `[ERROR] Status: ${statusCode} | Path: ${req.path} | API Message: ${
-      errorDetails.message || "No specific message from API."
+    `[ERROR] Status: ${statusCode} | Path: ${req.path} | API Message: ${errorDetails.message || "No specific message from API."
     }`,
     errorDetails
   );
 
   if ((statusCode === 422 || statusCode === 409) && req.path === '/book-appointment') {
     return res
-      .status(409) 
+      .status(409)
       .json({
         success: false,
         message: "That time slot appears to be unavailable or has a conflict. Please check availability again.",
       });
   }
-  
+
   if (statusCode === 403) {
-      return res.status(500).json({ success: false, message: "API Authorization Forbidden. Check your API Key." });
+    return res.status(500).json({ success: false, message: "API Authorization Forbidden. Check your API Key." });
   }
 
   return res
@@ -400,10 +380,10 @@ function normalizeToE164(phone) {
 async function findOrCreateCustomer(customerInfo) {
   const { name, phone } = customerInfo;
   const e164Phone = normalizeToE164(phone);
-  
+
   const searchPayload = { phoneNumbers: [{ number: e164Phone }] };
   console.log("[INFO] Searching for customer with E.164 payload:", searchPayload);
-  
+
   const searchResponse = await shopmonkeyApi.post(
     "/customer/phone_number/search",
     searchPayload
@@ -458,7 +438,7 @@ async function findOrCreateCustomer(customerInfo) {
   const newCustomerName =
     newCustomer.name ||
     `${newCustomer.firstName || ""} ${newCustomer.lastName || ""}`.trim();
-    
+
   return {
     customerData: newCustomer,
     wasCreated: true,
@@ -516,7 +496,7 @@ async function findVehicle(customerId, vehicleDetails) {
   const searchResponse = await shopmonkeyApi.get(
     `/customer/${customerId}/vehicle`
   );
-  
+
   const existingVehicle = searchResponse.data.data.find((v) => {
     // This logic correctly handles multi-word makes/models by combining them before comparing.
     const dbVehicleName = `${v.make} ${v.model}`;
