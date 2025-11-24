@@ -151,10 +151,25 @@ app.post("/check-availability", async (req, res, next) => {
       return !isOverlapping;
     });
 
+    const formattedSlots = availableSlots.map((date) => {
+      return {
+        iso: date.toISOString(), // Keep this for booking
+        readable: date.toLocaleString("en-US", {
+          timeZone: "America/Los_Angeles", // Forces California Time
+          weekday: "short",
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+          hour12: true,
+        })
+      };
+    });
+
     res.status(200).json({
       success: true,
-      message: `Found ${availableSlots.length} available slots.`,
-      availableSlots: availableSlots.map((date) => date.toISOString()),
+      message: `Found ${formattedSlots.length} available slots.`,
+      availableSlots: formattedSlots, 
     });
 
   } catch (error) {
@@ -259,7 +274,7 @@ app.post("/booking", async (req, res, next) => {
       name: appointmentTitle,
       startDate: start.toISOString(),
       endDate: end.toISOString(),
-      color: "blue", // Green for confirmed/new
+      color: "blue", 
     };
 
     await shopmonkeyApi.post("/appointment", appointmentPayload);
