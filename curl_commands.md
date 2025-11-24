@@ -1,63 +1,64 @@
-# API Testing Commands
+# API Test Commands
 
-Here are the cURL commands to test the Shopmonkey Middleware APIs.
+Use these commands to test the `server.js` endpoints. Ensure your server is running (`node server.js`) before executing these.
 
-## 1. Create Customer & Vehicle (Combined)
-Creates a customer and links a vehicle to them in one go.
-**Required Fields:** `name`, `phone`, `make`, `model`
-**Optional Fields:** `licensePlate`
+## 1. Fetch Customer Detail
+Retrieves customer name and ID by phone number.
 
+**Git Bash / Mac / Linux / PowerShell (Newer):**
 ```bash
-curl -X POST http://localhost:3000/create-customer-vehicle \
+curl -X POST http://localhost:3000/fetch-customer-detail \
   -H "Content-Type: application/json" \
-  -d '{
-    "name": "John Doe",
-    "phone": "555-0199",
-    "make": "Toyota",
-    "model": "Camry",
-    "year": "2015",
-    "licensePlate": "ABC-1234"
-  }'
+  -d '{"phone": "555-123-4567"}'
+```
+
+**Windows Command Prompt (cmd.exe):**
+```cmd
+curl -X POST http://localhost:3000/fetch-customer-detail ^
+  -H "Content-Type: application/json" ^
+  -d "{\"phone\": \"555-123-4567\"}"
 ```
 
 ## 2. Check Availability
-Checks for available appointment slots.
-**Required Fields:** `startRange` (ISO date), `endRange` (ISO date), `durationMinutes`
+Checks for available 30-minute slots within a range.
 
+**Git Bash / Mac / Linux / PowerShell (Newer):**
 ```bash
 curl -X POST http://localhost:3000/check-availability \
   -H "Content-Type: application/json" \
   -d '{
-    "startRange": "2025-11-23T09:00:00.000Z",
-    "endRange": "2025-11-23T17:00:00.000Z",
-    "durationMinutes": 60
+    "startRange": "2025-11-25T09:00:00Z",
+    "endRange": "2025-11-25T17:00:00Z"
   }'
 ```
 
-## 3. Book Appointment
-Books an appointment for a customer.
-**Required Fields:** `phone`, `makeModel`, `title`, `startDate`, `durationMinutes`
+**Windows Command Prompt (cmd.exe):**
+```cmd
+curl -X POST http://localhost:3000/check-availability ^
+  -H "Content-Type: application/json" ^
+  -d "{\"startRange\": \"2025-11-25T09:00:00Z\", \"endRange\": \"2025-11-25T17:00:00Z\"}"
+```
 
+## 3. Booking
+Books an appointment. Creates customer/vehicle if missing.
+
+**Git Bash / Mac / Linux / PowerShell (Newer):**
 ```bash
-curl -X POST http://localhost:3000/book-appointment \
+curl -X POST http://localhost:3000/booking \
   -H "Content-Type: application/json" \
   -d '{
-    "phone": "555-0199",
-    "makeModel": "Toyota Camry",
+    "phone": "555-123-4567",
+    "name": "John Doe",
+    "make": "Toyota",
+    "model": "Camry",
     "title": "Oil Change",
-    "startDate": "2025-11-24T10:00:00.000Z",
-    "durationMinutes": 60
+    "startDate": "2025-11-25T10:00:00Z"
   }'
 ```
 
-## 4. Check Appointment Status
-Checks the status of the upcoming appointment for a customer.
-**Required Fields:** `phone`
-
-```bash
-curl -X POST http://localhost:3000/check-status \
-  -H "Content-Type: application/json" \
-  -d '{
-    "phone": "555-0199"
-  }'
+**Windows Command Prompt (cmd.exe):**
+```cmd
+curl -X POST http://localhost:3000/booking ^
+  -H "Content-Type: application/json" ^
+  -d "{\"phone\": \"555-123-4567\", \"name\": \"John Doe\", \"make\": \"Toyota\", \"model\": \"Camry\", \"title\": \"Oil Change\", \"startDate\": \"2025-11-25T10:00:00Z\"}"
 ```
