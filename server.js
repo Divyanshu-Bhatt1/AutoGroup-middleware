@@ -259,7 +259,7 @@ app.post("/booking", async (req, res, next) => {
       name: appointmentTitle,
       startDate: start.toISOString(),
       endDate: end.toISOString(),
-      color: "green", // Green for confirmed/new
+      color: "blue", // Green for confirmed/new
     };
 
     await shopmonkeyApi.post("/appointment", appointmentPayload);
