@@ -62,3 +62,66 @@ curl -X POST http://localhost:3000/booking ^
   -H "Content-Type: application/json" ^
   -d "{\"phone\": \"555-123-4567\", \"name\": \"John Doe\", \"make\": \"Toyota\", \"model\": \"Camry\", \"title\": \"Oil Change\", \"startDate\": \"2025-11-25T10:00:00Z\"}"
 ```
+
+## 4. Verify Appointment
+Verifies an appointment exists and matches vehicle details.
+
+**Git Bash / Mac / Linux / PowerShell (Newer):**
+```bash
+curl -X POST http://localhost:3000/verify-appointment \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone": "555-123-4567",
+    "make": "Toyota",
+    "model": "Camry",
+    "originalDate": "2025-11-25T10:00:00.000Z"
+  }'
+```
+
+**Windows Command Prompt (cmd.exe):**
+```cmd
+curl -X POST http://localhost:3000/verify-appointment ^
+  -H "Content-Type: application/json" ^
+  -d "{\"phone\": \"555-123-4567\", \"make\": \"Toyota\", \"model\": \"Camry\", \"originalDate\": \"2025-11-25T10:00:00.000Z\"}"
+```
+
+## 5. Cancel Appointment
+Cancels an appointment by phone and date.
+
+**Git Bash / Mac / Linux / PowerShell (Newer):**
+```bash
+curl -X POST http://localhost:3000/cancel-appointment \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone": "555-123-4567",
+    "originalDate": "2025-11-25T10:00:00.000Z"
+  }'
+```
+
+**Windows Command Prompt (cmd.exe):**
+```cmd
+curl -X POST http://localhost:3000/cancel-appointment ^
+  -H "Content-Type: application/json" ^
+  -d "{\"phone\": \"555-123-4567\", \"originalDate\": \"2025-11-25T10:00:00.000Z\"}"
+```
+
+## 6. Update Appointment
+Updates an appointment to a new time.
+
+**Git Bash / Mac / Linux / PowerShell (Newer):**
+```bash
+curl -X POST http://localhost:3000/update-appointment \
+  -H "Content-Type: application/json" \
+  -d '{
+    "phone": "555-123-4567",
+    "originalDate": "2025-11-25T10:00:00.000Z",
+    "newDate": "2025-11-26T14:00:00.000Z"
+  }'
+```
+
+**Windows Command Prompt (cmd.exe):**
+```cmd
+curl -X POST http://localhost:3000/update-appointment ^
+  -H "Content-Type: application/json" ^
+  -d "{\"phone\": \"555-123-4567\", \"originalDate\": \"2025-11-25T10:00:00.000Z\", \"newDate\": \"2025-11-26T14:00:00.000Z\"}"
+```

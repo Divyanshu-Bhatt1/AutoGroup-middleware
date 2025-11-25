@@ -169,7 +169,7 @@ app.post("/check-availability", async (req, res, next) => {
     res.status(200).json({
       success: true,
       message: `Found ${formattedSlots.length} available slots.`,
-      availableSlots: formattedSlots, 
+      availableSlots: formattedSlots,
     });
 
   } catch (error) {
@@ -274,7 +274,7 @@ app.post("/booking", async (req, res, next) => {
       name: appointmentTitle,
       startDate: start.toISOString(),
       endDate: end.toISOString(),
-      color: "blue", 
+      color: "blue",
     };
 
     await shopmonkeyApi.post("/appointment", appointmentPayload);
@@ -299,6 +299,124 @@ app.post("/booking", async (req, res, next) => {
   }
 });
 
+// 4. verify-appointment API
+app.post("/verify-appointment", async (req, res, next) => {
+  const { phone, make, model, originalDate } = req.body;
+
+  if (!phone || !make || !model || !originalDate) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing required fields: phone, make, model, originalDate.",
+    });
+  }
+
+  try {
+    const customer = await findCustomerByPhone(phone);
+    if (!customer) {
+      return res.status(404).json({ success: false, message: "Customer not found." });
+    }
+
+    const appointment = await findAppointmentByDate(customer.id, originalDate);
+    if (!appointment) {
+      return res.status(404).json({ success: false, message: "Appointment not found for this date." });
+    }
+
+    // Verify Vehicle
+    const vehicle = await getVehicleById(appointment.vehicleId);
+    if (!vehicle) {
+      return res.status(404).json({ success: false, message: "Vehicle associated with appointment not found." });
+    }
+
+    const makeMatch = isFuzzyMatch(vehicle.data.make, make);
+    const modelMatch = isFuzzyMatch(vehicle.data.model, model);
+
+    if (!makeMatch || !modelMatch) {
+      return res.status(404).json({
+        success: false,
+        message: "Appointment found, but vehicle details do not match."
+      });
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: "Appointment verified.",
+      appointment: {
+        id: appointment.id,
+        title: appointment.name,
+        startDate: appointment.startDate,
+        endDate: appointment.endDate,
+        vehicle: `${vehicle.data.make} ${vehicle.data.model}`
+      }
+    });
+
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// 5. cancel-appointment API
+app.post("/cancel-appointment", async (req, res, next) => {
+  const { phone, originalDate } = req.body;
+
+  if (!phone || !originalDate) {
+    return res.status(400).json({ success: false, message: "Missing required fields: phone, originalDate." });
+  }
+
+  try {
+    const customer = await findCustomerByPhone(phone);
+    if (!customer) return res.status(404).json({ success: false, message: "Customer not found." });
+
+    const appointment = await findAppointmentByDate(customer.id, originalDate);
+    if (!appointment) return res.status(404).json({ success: false, message: "Appointment not found." });
+
+    // Delete the appointment from Shopmonkey (provide empty body to satisfy content-type header requirement)
+    await shopmonkeyApi.delete(`/appointment/${appointment.id}`, { data: {} });
+
+    return res.status(200).json({ success: true, message: "Appointment deleted successfully." });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+// 6. update-appointment API
+app.post("/update-appointment", async (req, res, next) => {
+  const { phone, originalDate, newDate } = req.body;
+  const durationMinutes = 30;
+
+  if (!phone || !originalDate || !newDate) {
+    return res.status(400).json({ success: false, message: "Missing required fields: phone, originalDate, newDate." });
+  }
+
+  try {
+    const customer = await findCustomerByPhone(phone);
+    if (!customer) return res.status(404).json({ success: false, message: "Customer not found." });
+
+    const appointment = await findAppointmentByDate(customer.id, originalDate);
+    if (!appointment) return res.status(404).json({ success: false, message: "Appointment not found." });
+
+    // Check availability for newDate
+    const start = new Date(newDate);
+    if (isNaN(start.getTime())) {
+      return res.status(400).json({ success: false, message: "Invalid newDate format." });
+    }
+    const end = new Date(start.getTime() + durationMinutes * 60000);
+
+    // Check for conflicts (excluding current appointment)
+    const isSlotAvailable = await checkSlotAvailability(start, end, appointment.id);
+    if (!isSlotAvailable) {
+      return res.status(409).json({ success: false, message: "The new time slot is already booked." });
+    }
+
+    await shopmonkeyApi.put(`/appointment/${appointment.id}`, {
+      startDate: start.toISOString(),
+      endDate: end.toISOString()
+    });
+
+    return res.status(200).json({ success: true, message: "Appointment updated successfully." });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 // --- Centralized Error Handling Middleware ---
 app.use((error, req, res, next) => {
@@ -488,6 +606,74 @@ async function findOrCreateVehicle(customerId, vehicleDetails) {
 
   const createResponse = await shopmonkeyApi.post("/vehicle", createPayload);
   return { vehicleData: createResponse.data.data, wasCreated: true };
+}
+
+async function findAppointmentByDate(customerId, dateString) {
+  const targetDate = new Date(dateString);
+  console.log(`[DEBUG] findAppointmentByDate: customerId=${customerId} (${typeof customerId})`);
+
+  // Search for active appointments for this customer
+  const searchPayload = {
+    where: {
+      customerId: String(customerId),
+      status: { _neq: "Canceled" }
+    },
+    limit: 50
+  };
+  console.log(`[DEBUG] searchPayload:`, JSON.stringify(searchPayload, null, 2));
+
+  const response = await shopmonkeyApi.post("/appointment/search", searchPayload);
+  const appointments = response.data.data || [];
+
+  return appointments.find(appt => {
+    const apptStart = new Date(appt.startDate);
+    // Allow a small tolerance (e.g., same minute) or strict equality
+    // Using strict equality for now as per requirement to match "originalDate"
+    return apptStart.toISOString() === targetDate.toISOString();
+  });
+}
+
+async function getVehicleById(vehicleId) {
+  try {
+    const response = await shopmonkeyApi.get(`/vehicle/${vehicleId}`);
+    return response.data;
+  } catch (error) {
+    console.error(`[ERROR] Failed to fetch vehicle ${vehicleId}:`, error.message);
+    return null;
+  }
+}
+
+async function checkSlotAvailability(start, end, excludeAppointmentId = null) {
+  // Search window: +/- 24 hours
+  const searchStartWindow = new Date(start.getTime() - 24 * 60 * 60 * 1000);
+  const searchEndWindow = new Date(start.getTime() + 24 * 60 * 60 * 1000);
+
+  const searchPayload = {
+    where: {
+      locationId: { _eq: LOCATION_ID },
+      startDate: {
+        gte: searchStartWindow.toISOString(),
+        lte: searchEndWindow.toISOString()
+      },
+      status: { _neq: "Canceled" }
+    },
+    limit: 100,
+  };
+
+  const response = await shopmonkeyApi.post("/appointment/search", searchPayload);
+  const potentialConflicts = response.data.data || [];
+
+  const conflictingAppointment = potentialConflicts.find((appt) => {
+    if (excludeAppointmentId && appt.id === excludeAppointmentId) return false;
+
+    const apptStart = new Date(appt.startDate);
+    const apptEnd = new Date(appt.endDate);
+
+    // Overlap logic: (StartA < EndB) and (EndA > StartB)
+    return apptStart < end && apptEnd > start;
+  });
+
+  return !conflictingAppointment;
 }
 
 // --- Start Server ---
