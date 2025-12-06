@@ -418,6 +418,155 @@ app.post("/update-appointment", async (req, res, next) => {
   }
 });
 
+// 7. identify-caller API
+app.post("/identify-caller", async (req, res, next) => {
+  const { phone } = req.body;
+console.time("identify-caller-duration");
+  if (!phone) {
+    return res.status(400).json({ found: false, message: "Missing phone number." });
+  }
+
+  try {
+    // --- Step 1: Customer Lookup (Fail Fast) ---
+    const e164Phone = normalizeToE164(phone);
+    // Explicitly using limit: 1 as requested for optimization
+    const customerSearchPayload = {
+      phoneNumbers: [{ number: e164Phone }]
+    };
+    console.time("phone-lookup");
+    const customerRes = await shopmonkeyApi.post("/customer/phone_number/search", customerSearchPayload);
+    const customers = customerRes.data.data || [];
+
+    console.timeEnd("phone-lookup");
+    if (customers.length === 0) {
+      console.timeEnd("identify-caller-duration");
+      return res.status(200).json({ found: false });
+    }
+
+    const customer = customers[0];
+    const customerId = customer.id;
+    // --- Step 2: Context Retrieval (Parallel) ---
+
+    // User requested strict future check: "only if the appointment time has not already passed."
+    // We use current UTC time for comparison.
+    const nowISO = new Date().toISOString();
+
+    const [ordersRes, appointmentsRes] = await Promise.all([
+      // Query A: Active Orders (Get all, filter later)
+      shopmonkeyApi.get(`/customer/${customerId}/order`, {
+        params: {
+          orderBy: 'updatedDate DESC',
+          limit: 1,
+          where:JSON.stringify({
+             invoiced: false,
+             status:'Estimate'
+            //  paid: false
+          })
+        }
+      }),
+      // Query B: Future Appointments (Strictly Future)
+      shopmonkeyApi.post("/appointment/search", {
+        where: {
+          customerId: String(customerId),
+          startDate: { gte: nowISO },
+          status: { _neq: "Canceled" }
+        },
+        orderBy:{ startDate: "asc" },
+        limit: 1
+      })
+    ]);
+
+    // Handle Orders Response
+    const allOrders = ordersRes.data.data || [];
+
+    // In-Memory Filter for Active Orders
+    // Updated Rule: Include ONLY status === "Estimate"
+    // const activeOrders = allOrders.filter(order => order.status === "Estimate");
+    const futureAppointments = appointmentsRes.data.data || [];
+
+    // --- Step 3: Response Construction ---
+
+    // Process Active Service
+    let activeServiceObj = {
+      exists: false,
+      vehicle: null,
+      status: null,
+      orderId: null
+    };
+
+     const activeOrders = allOrders;
+
+
+    if (activeOrders&&activeOrders.length>0) {
+      const order = activeOrders[0];
+      let vehicleName = "Unknown Vehicle";
+
+     
+        vehicleName = `${order.generatedVehicleName || 'Your Vehicle'}`.trim();
+     
+      
+
+      activeServiceObj = {
+        exists: true,
+        vehicle: vehicleName,
+        status: order.status,
+        orderId: order.id
+      };
+    }
+
+    // Process Future Appointment
+    let futureAppointmentObj = {
+      exists: false,
+      vehicle: null,
+      date: null
+    };
+
+    if (futureAppointments.length > 0) {
+      const appt = futureAppointments[0];
+      // Fetch vehicle details if not fully present in appointment object (often it's just an ID or partial)
+      // For speed, strict requirements didn't say to fetch vehicle details if missing, 
+      // but usually appointment objects have some vehicle info or we rely on what's there.
+      // We'll map what we have. If vehicle data is sparse, we might return "Unknown".
+      // Note: Appointment search often returns a 'vehicle' object or 'vehicleId'.
+      // If we really need vehicle name and it's missing, we'd need another call, but that violates "Fail Fast/Minimal".
+      // We will try to extract from 'vehicle' property if it exists, or description/title.
+      let vehicleName = "Unknown Vehicle";
+      if (appt.vehicle) {
+        vehicleName = `${appt.vehicle.year || ''} ${appt.vehicle.make || ''} ${appt.vehicle.model || ''}`.trim();
+      } else if (appt.name) {
+        // Fallback: try to parse from name if we formulated it as "Customer / Vehicle / ..."
+        const parts = appt.name.split('/');
+        if (parts.length >= 2) vehicleName = parts[1].trim();
+      }
+
+      futureAppointmentObj = {
+        exists: true,
+        vehicle: vehicleName,
+        date: appt.startDate
+      };
+    }
+
+    console.timeEnd("identify-caller-duration");
+
+    // Final Response
+    return res.status(200).json({
+      found: true,
+      customer: {
+        id: customer.id,
+        name: `${customer.firstName || ""} ${customer.lastName || ""}`.trim(),
+        phone:phone
+      },
+      activeService: activeServiceObj,
+      futureAppointment: futureAppointmentObj
+    });
+
+  } catch (error) {
+    console.timeEnd("identify-caller-duration");
+
+    return next(error);
+  }
+});
+
 // --- Centralized Error Handling Middleware ---
 app.use((error, req, res, next) => {
   const errorDetails = error.response

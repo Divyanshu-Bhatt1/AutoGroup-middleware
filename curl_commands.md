@@ -125,3 +125,20 @@ curl -X POST http://localhost:3000/update-appointment ^
   -H "Content-Type: application/json" ^
   -d "{\"phone\": \"555-123-4567\", \"originalDate\": \"2025-11-25T10:00:00.000Z\", \"newDate\": \"2025-11-26T14:00:00.000Z\"}"
 ```
+
+## 7. Identify Caller
+Retrieves customer context (Active Orders and Future Appointments) for Voice AI.
+
+**Git Bash / Mac / Linux / PowerShell (Newer):**
+```bash
+curl -X POST http://localhost:3000/identify-caller \
+  -H "Content-Type: application/json" \
+  -d '{"phone": "555-123-4567"}'
+```
+
+**Windows Command Prompt (cmd.exe):**
+```cmd
+curl -X POST http://localhost:3000/identify-caller ^
+  -H "Content-Type: application/json" ^
+  -d "{\"phone\": \"555-123-4567\"}"
+```
