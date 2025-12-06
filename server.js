@@ -429,6 +429,7 @@ console.time("identify-caller-duration");
   try {
     // --- Step 1: Customer Lookup (Fail Fast) ---
     const e164Phone = normalizeToE164(phone);
+    console.log("prev ",phone," next ",e164Phone)
     // Explicitly using limit: 1 as requested for optimization
     const customerSearchPayload = {
       phoneNumbers: [{ number: e164Phone }]
