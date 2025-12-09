@@ -83,88 +83,179 @@ app.post("/fetch-customer-detail", async (req, res, next) => {
 });
 
 // 2. check-availability API
+// 2. check-availability API
 app.post("/check-availability", async (req, res, next) => {
-  const { startRange, endRange } = req.body;
-  // Default duration to 30 minutes as requested
+  const { startRange } = req.body;
   const durationMinutes = 30;
 
-  if (!startRange || !endRange) {
-    return res
-      .status(400)
-      .json({ success: false, message: "Missing required parameters 'startRange' or 'endRange'." });
+  console.time('check-availability-timer'); // Timer Start
+
+  if (!startRange) {
+    return res.status(400).json({
+      success: false,
+      message: "Missing required parameter 'startRange'.",
+    });
   }
 
   try {
-    // Fetch existing appointments to check for conflicts
+    const inputDate = new Date(startRange);
+
+    // --- STEP 1: DETERMINE THE EXACT DAY IN SHOP TIMEZONE ---
+    // We break the input date down into "Shop Time" components to ensure we are targeting the right day.
+    const formatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: SHOP_TIMEZONE,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
+    
+    // This gives us "12/08/2025" regardless of whether input was UTC or PST
+    const [{ value: month },,{ value: day },,{ value: year }] = formatter.formatToParts(inputDate);
+    const shopDateString = `${year}-${month}-${day}`;
+
+    console.log(`[DEBUG] Input: ${startRange}`);
+    console.log(`[DEBUG] Shop Target Date: ${shopDateString} (${SHOP_TIMEZONE})`);
+
+    // --- STEP 2: DEFINE SEARCH BOUNDARIES ---
+    // We construct a window that definitely covers the Shop's day.
+    // We simply search from 12:00 AM to 11:59 PM of that specific shop day.
+    // Note: We interpret this string as if it's in the shop timezone by appending the input's offset or handling it in the loop.
+    // A robust way to ensure we get the full UTC range for "Monday in LA":
+    // 8 AM PST is approx 16:00 UTC. 
+    // We will set our search cursor to a safe 'start' (Midnight UTC of requested day) and iterate sufficiently.
+    
+    // Simple approach: Use the input date, reset to 12:00 PM UTC, then scan +/- 18 hours.
+    // This covers all timezone possibilities for a single day.
+    const baseDate = new Date(startRange); 
+    // Reset base to rough middle of day to avoid edge cases
+    baseDate.setUTCHours(12, 0, 0, 0); 
+    
+    const searchLoopStart = new Date(baseDate.getTime() - 18 * 60 * 60 * 1000); // Look back 18h
+    const searchLoopEnd = new Date(baseDate.getTime() + 18 * 60 * 60 * 1000);   // Look forward 18h
+
+    console.log(`[DEBUG] Search Loop (UTC): ${searchLoopStart.toISOString()} to ${searchLoopEnd.toISOString()}`);
+
+    // --- STEP 3: FETCH APPOINTMENTS (Only strictly for this window) ---
+    // As per your request: No 24h buffer. Just what is in this window.
     const searchPayload = {
       where: {
         locationId: { _eq: LOCATION_ID },
-        startDate: { gte: startRange },
-        endDate: { lte: endRange },
-        status: { _neq: "Canceled" } // Exclude canceled appointments
+        startDate: { gte: searchLoopStart.toISOString() },
+        endDate: { lte: searchLoopEnd.toISOString() },
+        status: { _neq: "Canceled" },
       },
+      limit: 100,
     };
 
-    const response = await shopmonkeyApi.post(
-      "/appointment/search",
-      searchPayload
-    );
+    const response = await shopmonkeyApi.post("/appointment/search", searchPayload);
+    const existingAppointments = response.data.data || [];
+    console.log(`[DEBUG] Found ${existingAppointments.length} existing appointments in this window.`);
 
-    const existingAppointments = response.data.data;
-    const businessHours = { start: 9, end: 17 }; // 9 AM to 5 PM
-
+    // --- STEP 4: GENERATE AND FILTER SLOTS ---
+    const currentNow = new Date();
     const potentialSlots = [];
-    let currentTime = new Date(startRange);
-    const endTime = new Date(endRange);
+    
+    let slotTime = new Date(searchLoopStart);
+    // Align to nearest 30 min to be clean
+    if(slotTime.getMinutes() > 30) slotTime.setMinutes(60,0,0);
+    else if(slotTime.getMinutes() > 0) slotTime.setMinutes(30,0,0);
 
-    // Generate 30-minute slots
-    while (currentTime < endTime) {
-      const { hour, day } = getShopHourAndDay(currentTime);
+    // Loop through the wide window, but only keep slots that match the specific Shop Date and Hours
+    while (slotTime < searchLoopEnd) {
+      
+      // 1. Convert Current Slot to Shop Details
+      const shopTime = getShopTimeDetails(slotTime); 
+      // Returns: { year: 2025, month: 12, day: 8, weekday: 1 (Mon), hour: 8, minute: 0 }
+      
+      // 2. CHECK: Is this slot actually on the requested day?
+      // (This filters out Sunday night or Tuesday morning that might be in the buffer)
+      // We compare YYYY-MM-DD
+      const currentSlotDateString = `${shopTime.year}-${String(shopTime.month).padStart(2,'0')}-${String(shopTime.day).padStart(2,'0')}`;
+      
+      if (currentSlotDateString === shopDateString) {
+        
+        // 3. CHECK: Business Hours
+        let isOpen = false;
+        let openHour = 0;
+        let openMinute = 0;
+        let closeHour = 0;
+        let closeMinute = 0;
 
-      // Check for weekdays (Mon-Fri) and business hours
-      // 0 = Sun, 6 = Sat
-      if (
-        day > 0 &&
-        day < 6 &&
-        hour >= businessHours.start &&
-        hour < businessHours.end
-      ) {
-        potentialSlots.push(new Date(currentTime));
+        if (shopTime.weekday >= 1 && shopTime.weekday <= 5) { // Mon-Fri
+          isOpen = true;
+          openHour = 8;
+          openMinute = 0;
+          closeHour = 16;
+          closeMinute = 30;
+        } else if (shopTime.weekday === 6) { // Sat
+          isOpen = true;
+          openHour = 9;
+          openMinute = 0;
+          closeHour = 11;
+          closeMinute = 0;
+        }
+
+        const slotMinutes = shopTime.hour * 60 + shopTime.minute;
+        const openMinutes = openHour * 60 + openMinute;
+        const closeMinutes = closeHour * 60 + closeMinute;
+
+        if (isOpen && slotMinutes >= openMinutes && slotMinutes < closeMinutes) {
+          
+          const candidateStart = new Date(slotTime);
+          const candidateEnd = new Date(candidateStart.getTime() + durationMinutes * 60000);
+          let isValid = true;
+
+          // 4. CHECK: Saturday 24h Notice
+          if (shopTime.weekday === 6) {
+            if ((candidateStart.getTime() - currentNow.getTime()) < (24 * 60 * 60 * 1000)) {
+               // Optional: Log discarded Saturday slots
+               // console.log(`[DEBUG] Discarded Sat Slot (Too soon): ${candidateStart.toISOString()}`);
+               isValid = false;
+            }
+          }
+
+          // 5. CHECK: Conflicts
+          if (isValid) {
+            const isOverlapping = existingAppointments.some((appt) => {
+              const apptStart = new Date(appt.startDate);
+              const apptEnd = new Date(appt.endDate);
+              // Standard Overlap Logic
+              return apptStart < candidateEnd && apptEnd > candidateStart;
+            });
+
+            if (isOverlapping) {
+               // console.log(`[DEBUG] Slot Conflict: ${candidateStart.toISOString()}`);
+               isValid = false;
+            }
+          }
+
+          if (isValid) {
+            potentialSlots.push(candidateStart);
+          }
+        }
       }
 
-      // Increment by 30 minutes
-      currentTime.setMinutes(currentTime.getMinutes() + 30);
+      // Increment 30 mins
+      slotTime.setMinutes(slotTime.getMinutes() + 30);
     }
 
-    // Filter slots based on conflicts
-    const availableSlots = potentialSlots.filter((slotStart) => {
-      const slotEnd = new Date(slotStart.getTime() + durationMinutes * 60000);
-
-      const isOverlapping = existingAppointments.some((appt) => {
-        const apptStart = new Date(appt.startDate);
-        const apptEnd = new Date(appt.endDate);
-
-        // Check for overlap
-        return apptStart < slotEnd && apptEnd > slotStart;
-      });
-
-      return !isOverlapping;
-    });
-
-    const formattedSlots = availableSlots.map((date) => {
+    const formattedSlots = potentialSlots.map((date) => {
       return {
-        iso: date.toISOString(), // Keep this for booking
+        iso: date.toISOString(),
         readable: date.toLocaleString("en-US", {
-          timeZone: "America/Los_Angeles", // Forces California Time
+          timeZone: SHOP_TIMEZONE,
           weekday: "short",
           month: "short",
           day: "numeric",
           hour: "numeric",
           minute: "2-digit",
           hour12: true,
-        })
+        }),
       };
     });
+
+    console.log(`[DEBUG] Final Available Slots Count: ${formattedSlots.length}`);
+    console.timeEnd('check-availability-timer');
 
     res.status(200).json({
       success: true,
@@ -173,9 +264,12 @@ app.post("/check-availability", async (req, res, next) => {
     });
 
   } catch (error) {
+    console.timeEnd('check-availability-timer');
     return next(error);
   }
 });
+
+
 
 // 3. booking API
 app.post("/booking", async (req, res, next) => {
@@ -459,9 +553,7 @@ console.time("identify-caller-duration");
           orderBy: 'updatedDate DESC',
           limit: 1,
           where:JSON.stringify({
-             invoiced: false,
-             status:'Estimate'
-            //  paid: false
+             archived: false,
           })
         }
       }),
@@ -591,19 +683,37 @@ app.use((error, req, res, next) => {
 
 // --- Helper Functions ---
 
-function getShopHourAndDay(utcDate) {
-  const hourString = utcDate.toLocaleString("en-US", {
+
+/**
+ * Breaks a UTC Date object down into the Shop's Local Timezone components.
+ * Essential for validating 8:00 AM vs 4:30 PM accurately.
+ */
+function getShopTimeDetails(utcDate) {
+  const formatter = new Intl.DateTimeFormat("en-US", {
     timeZone: SHOP_TIMEZONE,
-    hour: "2-digit",
     hour12: false,
-  });
-  const hour = parseInt(hourString.split(" ")[0], 10) % 24;
-  const dayString = utcDate.toLocaleString("en-US", {
-    timeZone: SHOP_TIMEZONE,
     weekday: "short",
+    year: "numeric",
+    month: "numeric",
+    day: "numeric",
+    hour: "numeric",
+    minute: "numeric",
   });
+
+  const parts = formatter.formatToParts(utcDate);
+  const partMap = {};
+  parts.forEach((p) => (partMap[p.type] = p.value));
+
   const dayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
-  return { hour, day: dayMap[dayString] };
+
+  return {
+    year: parseInt(partMap.year, 10),
+    month: parseInt(partMap.month, 10),
+    day: parseInt(partMap.day, 10),
+    weekday: dayMap[partMap.weekday],
+    hour: parseInt(partMap.hour, 10) % 24,
+    minute: parseInt(partMap.minute, 10),
+  };
 }
 
 function formatToShopTime(utcDate) {
